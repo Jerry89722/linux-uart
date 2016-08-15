@@ -255,6 +255,7 @@ int main(int argc, char* argv[])
 	pthread_t tid;
 	pthread_create(&tid, NULL, tty_rcv, (void*)&fd_tty);
 
+	pthread_detach(tid);
 	for( ; ; ){
 		//printf("temperature = %d \r\n", temp);
 		if(signalno == 2)
