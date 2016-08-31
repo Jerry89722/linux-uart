@@ -10,6 +10,35 @@
 #include <pthread.h>
 #include <sys/types.h>
 
+
+//  获取硬盘温度脚本代码
+char* get_hddtempsh = "diskname=`cat /proc/partitions | grep \"sd[a-z]$\" | awk '{print $4}'`\n \
+for i in $diskname; do\n \
+	scsidevinfo=`find /sys/class/scsi_device/*/device/ -name $i`\n \
+	ishdisk=`cat $scsidevinfo/removable`\n \
+	if [ \"$ishdisk\" = 0 ]; then\n \
+		disksymbol=`echo $scsidevinfo | awk -F '/' '{print $5}' | awk -F ':' '{print $1}'`\n \
+		ls /proc/scsi/usb-storage/ 2>/dev/null | grep ^$disksymbol$\n \
+		if [ $? != 0 ]; then\n \
+			temp=$temp\" \"`lancehddtemp /dev/$i 2>/dev/null | awk -F ':' '{print $3}' | awk '{print $1}'`\n \
+		fi\n \
+	fi\n \
+done\n \
+disknum=`echo $temp | awk '{print NF}'`\n \
+if [ $disknum = 1 ];then\n \
+	echo $temp\n \
+elif [ $disknum = 2 ]; then\n \
+	res=`echo $temp | awk '{print $1 \" - \" $2}'`\n \
+	res=`expr $res`\n \
+	if [ $res -gt 0 ]; then\n \
+		echo $temp | awk '{print $1}'\n \
+	else\n \
+		echo $temp | awk '{print $2}'\n \
+	fi\n \
+fi\n \
+";
+
+
 /*打开串口函数*/
 int open_port(int fd,int comport)
 {
@@ -26,7 +55,7 @@ int open_port(int fd,int comport)
 	}	
 	else if(comport==2)//串口 2
 	{
-		fd = open( "/dev/ttyS1", O_RDWR|O_NOCTTY|O_NDELAY);
+		fd = open( "/dev/ttyS1", O_RDWR|O_NOCTTY);
 		if (-1 == fd){
 			perror("Can't Open Serial Port");
 			return(-1);
@@ -157,6 +186,11 @@ int set_opt(int fd,int nSpeed, int nBits, char nEvent, int nStop)
 	return 0;
 }
 
+
+
+/****************************************************************/
+static struct flock tty_lock;
+
 int char2temp(char* p_temp)
 {
 	int temp;
@@ -182,7 +216,7 @@ int tempf_open(void)
 	return fd;
 }
 
-int get_temp(int fd)
+int cputemp_get(int fd)
 {
 	char temp_char[10] = {};
 
@@ -203,21 +237,20 @@ static int signalno = 0;
 void* tty_rcv(void* fd_tty)
 {
 	int fd = *((int*)fd_tty);
-	char tty_signal[10] = {};
+	char tty_signal[64] = {};
 	unsigned char power_signal = 0xff;
 	while(1){
-		int res = read(fd, tty_signal, 10);
-		lseek(fd, SEEK_SET, 0);
-		
+		int res = read(fd, tty_signal, 64);
+		//printf("%s", tty_signal);	
 		if(!strncmp(tty_signal, "poweroff", 8)){
-			printf("poweroff \n");
-			write(fd, &power_signal, 1);
-			//kill(getpid(), 2);
-			signalno = 2;
+			if(fcntl(fd, F_SETLK, &tty_lock) == 0){
+				write(fd, &power_signal, 1);	
+				close(fd);
+			}
 			system("poweroff -f");
 			break;
 		} else {
-			memset(tty_signal, '\0', 10);
+			memset(tty_signal, '\0', 64);
 		}
 	}
 	return NULL;
@@ -225,12 +258,37 @@ void* tty_rcv(void* fd_tty)
 
 void sighandler(int arg)
 {
-	printf("get a signal = %d \n ", arg);
+	//printf("get a signal = %d \n ", arg);
 	char data;
 	signalno = arg;
 	return ;
 }
 
+unsigned char hddtemp_get(void)
+{
+	unsigned char temp = 0;
+	char temp_str[10] = {};
+	FILE* pf = NULL;
+
+	pf = popen("sh /tmp/run/hddtemp", "r");
+	if(NULL == fgets(temp_str, 12, pf)) {
+		return 0;
+	}
+	temp = atoi(temp_str);
+	printf("res = %d \n", temp);
+	pclose(pf);
+	return temp;
+}
+
+void hddtemp_get_init(void){
+	int fd = open("/tmp/run/hddtemp", O_RDWR | O_CREAT, 777);
+	if(fd < 0)
+		perror("open"), exit(-1);
+	int res = write(fd, get_hddtempsh, strlen(get_hddtempsh));
+	if(res < 0)
+		perror("write"), exit(-1);
+	close(fd);
+}
 int main(int argc, char* argv[])
 {
 	int nwrite;
@@ -242,6 +300,11 @@ int main(int argc, char* argv[])
 	signal(3, sighandler);
 	signal(4, sighandler);
 
+	tty_lock.l_type = F_WRLCK;
+	tty_lock.l_whence = SEEK_SET;
+	tty_lock.l_start = 0;
+	tty_lock.l_len = 10;
+	
 	if((fd_tty=open_port(fd_tty, port))<0){//打开串口
 		perror("open_port error");
 		return;
@@ -250,26 +313,34 @@ int main(int argc, char* argv[])
 		perror("set_opt error");
 		return;
 	}
-
+	
 	int fd_tempf = tempf_open();
 	pthread_t tid;
 	pthread_create(&tid, NULL, tty_rcv, (void*)&fd_tty);
-
+	
 	pthread_detach(tid);
+	
+	hddtemp_get_init();
 	for( ; ; ){
-		//printf("temperature = %d \r\n", temp);
 		if(signalno == 2)
 			temp = 0xff; // 关机
 		else if(signalno == 3)
 			temp = 0xfe; // 初始化
 		else if(signalno == 4)
 			temp = 0xfd; // 恢复出厂设置
-		else
-			temp = (unsigned char)get_temp(fd_tempf);
-		
-		nwrite=write(fd_tty, &temp,1);//写串口
-		lseek(fd_tty, SEEK_SET, 0);
-		sleep(1);
+		else {
+			unsigned char temp_cpu = (unsigned char)cputemp_get(fd_tempf);
+			unsigned char temp_hdd = hddtemp_get();
+			temp = temp_cpu > (75 + (temp_hdd - 35) * 2) ?  temp_cpu : (75 + (temp_hdd - 35) * 2);  //35~55 75~115
+		}
+		//printf("signalno = %d \n", signalno);
+		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){
+			nwrite=write(fd_tty, &temp,1);//写串口
+			lseek(fd_tty, SEEK_SET, 0);
+			tty_lock.l_type = F_UNLCK;
+			fcntl(fd_tty, F_SETLK, &tty_lock);
+			sleep(1);
+		}
 	}
 	close(fd_tempf);
 	close(fd_tty);
