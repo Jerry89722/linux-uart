@@ -264,7 +264,7 @@ void sighandler(int arg)
 	return ;
 }
 
-unsigned char hddtemp_get(void)
+char hddtemp_get(void)
 {
 	unsigned char temp = 0;
 	char temp_str[10] = {};
@@ -321,6 +321,9 @@ int main(int argc, char* argv[])
 	pthread_detach(tid);
 	
 	hddtemp_get_init();
+	char temp_hdd = 30;  //初始值赋为正常值
+	unsigned char temp_cpu = 75; //初始值赋为正常值
+	char flag_tempget = 0;
 	for( ; ; ){
 		if(signalno == 2)
 			temp = 0xff; // 关机
@@ -329,9 +332,17 @@ int main(int argc, char* argv[])
 		else if(signalno == 4)
 			temp = 0xfd; // 恢复出厂设置
 		else {
-			unsigned char temp_cpu = (unsigned char)cputemp_get(fd_tempf);
-			unsigned char temp_hdd = hddtemp_get();
-			temp = temp_cpu > (75 + (temp_hdd - 35) * 2) ?  temp_cpu : (75 + (temp_hdd - 35) * 2);  //35~55 75~115
+			if(flag_tempget++ >= 5){  // 每5s获取一次温度
+				flag_tempget = 0; 
+				temp_cpu = (unsigned char)cputemp_get(fd_tempf);
+				if((temp_hdd = hddtemp_get()) < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0的问题
+					temp_hdd = 0;
+				temp_hdd = (75*10 + (temp_hdd - 30) * 16) / 10;
+			
+				temp = temp_cpu > temp_hdd ? temp_cpu : temp_hdd;  //30~55 75~115
+
+				printf("temp = %d, temp_hdd = %d, temp_cpu = %d \n", temp, temp_hdd, temp_cpu);
+			}
 		}
 		//printf("signalno = %d \n", signalno);
 		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){
