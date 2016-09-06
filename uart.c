@@ -9,35 +9,6 @@
 #include <stdlib.h>
 #include <pthread.h>
 
-
-//  获取硬盘温度脚本代码
-char* get_hddtempsh = "diskname=`cat /proc/partitions | grep \"sd[a-z]$\" | awk '{print $4}'`\n \
-for i in $diskname; do\n \
-	scsidevinfo=`find /sys/class/scsi_device/*/device/ -name $i`\n \
-	ishdisk=`cat $scsidevinfo/removable`\n \
-	if [ \"$ishdisk\" = 0 ]; then\n \
-		disksymbol=`echo $scsidevinfo | awk -F '/' '{print $5}' | awk -F ':' '{print $1}'`\n \
-		ls /proc/scsi/usb-storage/ 2>/dev/null | grep ^$disksymbol$\n \
-		if [ $? != 0 ]; then\n \
-			temp=$temp\" \"`lancehddtemp /dev/$i 2>/dev/null | awk -F ':' '{print $3}' | awk '{print $1}'`\n \
-		fi\n \
-	fi\n \
-done\n \
-disknum=`echo $temp | awk '{print NF}'`\n \
-if [ $disknum = 1 ];then\n \
-	echo $temp\n \
-elif [ $disknum = 2 ]; then\n \
-	res=`echo $temp | awk '{print $1 \" - \" $2}'`\n \
-	res=`expr $res`\n \
-	if [ $res -gt 0 ]; then\n \
-		echo $temp | awk '{print $1}'\n \
-	else\n \
-		echo $temp | awk '{print $2}'\n \
-	fi\n \
-fi\n \
-";
-
-
 /*打开串口函数*/
 int open_port(int fd,int comport)
 {
@@ -169,8 +140,8 @@ int set_opt(int fd,int nSpeed, int nBits, char nEvent, int nStop)
 		newtio.c_cflag |= CSTOPB;
 
 	/*设置等待时间和最小接收字符*/
-	newtio.c_cc[VTIME] = 0;
-	newtio.c_cc[VMIN] = 0;
+	newtio.c_cc[VTIME] = 2;
+	newtio.c_cc[VMIN] = 1;
 
 	/*处理未接收字符*/
 	tcflush(fd,TCIFLUSH);
@@ -239,8 +210,9 @@ void* tty_rcv(void* fd_tty)
 	char tty_signal[64] = {};
 	unsigned char power_signal = 0xff;
 	while(1){
+		//sleep(3);
 		int res = read(fd, tty_signal, 64);
-		//printf("%s", tty_signal);	
+	//	printf("res = %s\n", tty_signal);	
 		if(!strncmp(tty_signal, "poweroff", 8)){
 			if(fcntl(fd, F_SETLK, &tty_lock) == 0){
 				write(fd, &power_signal, 1);	
@@ -280,6 +252,33 @@ char hddtemp_get(void)
 }
 
 void hddtemp_get_init(void){
+//  获取硬盘温度脚本代码
+char get_hddtempsh[] = "diskname=`cat /proc/partitions | grep \"sd[a-z]$\" | awk '{print $4}'`\n \
+for i in $diskname; do\n \
+	scsidevinfo=`find /sys/class/scsi_device/*/device/ -name $i`\n \
+	ishdisk=`cat $scsidevinfo/removable`\n \
+	if [ \"$ishdisk\" = 0 ]; then\n \
+		disksymbol=`echo $scsidevinfo | awk -F '/' '{print $5}' | awk -F ':' '{print $1}'`\n \
+		ls /proc/scsi/usb-storage/ 2>/dev/null | grep ^$disksymbol$\n \
+		if [ $? != 0 ]; then\n \
+			temp=$temp\" \"`lancehddtemp /dev/$i 2>/dev/null | awk -F ':' '{print $3}' | awk '{print $1}'`\n \
+		fi\n \
+	fi\n \
+done\n \
+disknum=`echo $temp | awk '{print NF}'`\n \
+if [ $disknum = 1 ];then\n \
+	echo $temp\n \
+elif [ $disknum = 2 ]; then\n \
+	res=`echo $temp | awk '{print $1 \" - \" $2}'`\n \
+	res=`expr $res`\n \
+	if [ $res -gt 0 ]; then\n \
+		echo $temp | awk '{print $1}'\n \
+	else\n \
+		echo $temp | awk '{print $2}'\n \
+	fi\n \
+fi\n \
+";
+
 	int fd = open("/tmp/run/hddtemp", O_RDWR | O_CREAT, 777);
 	if(fd < 0)
 		perror("open"), exit(-1);
