@@ -8,6 +8,7 @@
 #include <termios.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <signal.h>
 
 /*打开串口函数*/
 int open_port(int fd,int comport)
@@ -209,13 +210,13 @@ void* tty_rcv(void* fd_tty)
 	int fd = *((int*)fd_tty);
 	char tty_signal[64] = {};
 	unsigned char power_signal = 0xff;
+	int res = 0;
 	while(1){
-		//sleep(3);
-		int res = read(fd, tty_signal, 64);
-	//	printf("res = %s\n", tty_signal);	
+		res = read(fd, tty_signal, 64);
+		
 		if(!strncmp(tty_signal, "poweroff", 8)){
 			if(fcntl(fd, F_SETLK, &tty_lock) == 0){
-				write(fd, &power_signal, 1);	
+				write(fd, &power_signal, 1);
 				close(fd);
 			}
 			system("poweroff -f");
@@ -238,15 +239,20 @@ void sighandler(int arg)
 char hddtemp_get(void)
 {
 	unsigned char temp = 0;
-	char temp_str[10] = {};
+	char temp_str[12] = {};
+	int status = 0;
 	FILE* pf = NULL;
-
-	pf = popen("sh /tmp/run/hddtemp", "r");
+	
+	//signal(SIGCHLD, SIG_IGN); 
+	//popen调用产生的子进程退出后会发SIGHLD信号
+	pf = popen("/bin/sh /tmp/run/hddtemp", "r");
 	if(NULL == fgets(temp_str, 12, pf)) {
 		return 0;
 	}
+
 	temp = atoi(temp_str);
-	printf("res = %d \n", temp);
+
+	printf("hddtemp = %d \n", temp);
 	pclose(pf);
 	return temp;
 }
@@ -294,8 +300,8 @@ int main(int argc, char* argv[])
 	unsigned char temp;
 	int port = 2;
 	
-	signal(1, sighandler);
-	signal(2, sighandler);
+	signal(1, sighandler);   // 信号1用于恢复到正常读取硬盘和cpu的温度的流程中去
+	signal(2, sighandler);  // 以下3个信号用于设置关机, 初始化, 恢复出厂设置的3种状态码值, 最后统一由串口发给mcu
 	signal(3, sighandler);
 	signal(4, sighandler);
 
@@ -330,9 +336,9 @@ int main(int argc, char* argv[])
 			temp = 0xfe; // 初始化
 		else if(signalno == 4)
 			temp = 0xfd; // 恢复出厂设置
-		else {
+		else { //信号1时, 正常读取硬盘, cpu的温度
 			if(flag_tempget++ >= 5){  // 每5s获取一次温度
-				flag_tempget = 0; 
+				flag_tempget = 0;
 				temp_cpu = (unsigned char)cputemp_get(fd_tempf);
 				if((temp_hdd = hddtemp_get()) < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0引发未知错误, 没硬盘时硬盘检测到的温度会是0
 					temp_hdd = 0;
@@ -340,17 +346,17 @@ int main(int argc, char* argv[])
 			
 				temp = temp_cpu > temp_hdd ? temp_cpu : temp_hdd;  //30~55 75~115
 
-				printf("temp = %d, temp_hdd = %d, temp_cpu = %d \n", temp, temp_hdd, temp_cpu);  //没硬盘时温度temp_hdd = 27
+				// printf("temp = %d, temp_hdd = %d, temp_cpu = %d \n", temp, temp_hdd, temp_cpu);  //没硬盘时温度temp_hdd = 27
 			}
 		}
 		//printf("signalno = %d \n", signalno);
 		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){
-			nwrite=write(fd_tty, &temp,1);//写串口
+			nwrite=write(fd_tty, &temp, 1);//写串口
 			lseek(fd_tty, SEEK_SET, 0);
 			tty_lock.l_type = F_UNLCK;
 			fcntl(fd_tty, F_SETLK, &tty_lock);
-			sleep(1);
 		}
+		sleep(1);
 	}
 	close(fd_tempf);
 	close(fd_tty);
