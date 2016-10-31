@@ -219,6 +219,7 @@ void* tty_rcv(void* fd_tty)
 				write(fd, &power_signal, 1);
 				close(fd);
 			}
+			system("sync");
 			system("poweroff -f");
 			break;
 		} else {
