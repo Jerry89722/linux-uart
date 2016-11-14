@@ -298,7 +298,7 @@ fi\n \
 int main(int argc, char* argv[])
 {
 	int nwrite;
-	unsigned char temp;
+	unsigned char temp = 50;  //初始化到正常的温度值, 以防第一次发送出现异常
 	int port = 2;
 	
 	signal(1, sighandler);   // 信号1用于恢复到正常读取硬盘和cpu的温度的流程中去
@@ -332,7 +332,7 @@ int main(int argc, char* argv[])
 	char flag_tempget = 0;
 	for( ; ; ){
 		if(signalno == 2)
-			temp = 0xff; // 关机
+			temp = 0xff; // 关机, 用于脚本编程中关机
 		else if(signalno == 3)
 			temp = 0xfe; // 初始化
 		else if(signalno == 4)
@@ -351,7 +351,7 @@ int main(int argc, char* argv[])
 			}
 		}
 		//printf("signalno = %d \n", signalno);
-		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){
+		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){   //文件锁, 防止与关机检测线程中写tty时冲突
 			nwrite=write(fd_tty, &temp, 1);//写串口
 			lseek(fd_tty, SEEK_SET, 0);
 			tty_lock.l_type = F_UNLCK;
