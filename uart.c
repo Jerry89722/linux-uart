@@ -301,8 +301,8 @@ int main(int argc, char* argv[])
 	unsigned char temp = 50;  //初始化到正常的温度值, 以防第一次发送出现异常
 	int port = 2;
 	
-	signal(1, sighandler);   // 信号1用于恢复到正常读取硬盘和cpu的温度的流程中去
-	signal(2, sighandler);  // 以下3个信号用于设置关机, 初始化, 恢复出厂设置的3种状态码值, 最后统一由串口发给mcu
+	signal(SIGUSR1, sighandler);   // 信号SIGUSR1用于恢复到正常读取硬盘和cpu的温度的流程中去
+	signal(SIGUSR2, sighandler);  // 以下3个信号用于设置关机, 初始化, 恢复出厂设置的3种状态码值, 最后统一由串口发给mcu
 	signal(3, sighandler);
 	signal(4, sighandler);
 
@@ -329,16 +329,22 @@ int main(int argc, char* argv[])
 	hddtemp_get_init();  //产生硬盘温度获取的脚本
 	char temp_hdd = 30;  //初始值赋为正常值
 	unsigned char temp_cpu = 75; //初始值赋为正常值
-	char flag_tempget = 0;
+	char flag_tempget = 90;
 	for( ; ; ){
-		if(signalno == 2)
+		if(signalno == SIGUSR2){
 			temp = 0xff; // 关机, 用于脚本编程中关机
-		else if(signalno == 3)
+			flag_tempget = 90;
+		}
+		else if(signalno == 3){
 			temp = 0xfe; // 初始化
-		else if(signalno == 4)
+			flag_tempget = 90;
+		}
+		else if(signalno == 4){
 			temp = 0xfd; // 恢复出厂设置
+			flag_tempget = 90;
+		}
 		else { //信号1时, 正常读取硬盘, cpu的温度
-			if(flag_tempget++ >= 5){  // 每5s获取一次温度
+			if(flag_tempget++ >= 90){  // 每90s获取一次温度
 				flag_tempget = 0;
 				temp_cpu = (unsigned char)cputemp_get(fd_tempf);
 				if((temp_hdd = hddtemp_get()) < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0引发未知错误, 没硬盘时硬盘检测到的温度会是0
