@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <signal.h>
+#include <syslog.h>
 
 /*打开串口函数*/
 int open_port(int fd,int comport)
@@ -269,6 +270,10 @@ for i in $diskname; do\n \
 		ls /proc/scsi/usb-storage/ 2>/dev/null | grep ^$disksymbol$\n \
 		if [ $? != 0 ]; then\n \
 			temp=$temp\" \"`lancehddtemp /dev/$i 2>/dev/null | awk -F ':' '{print $3}' | awk '{print $1}'`\n \
+			temp=`expr $temp + 0`\n \
+			if [ $? != 0 ]; then\n \
+				temp=0			\n \
+			fi\n \
 		fi\n \
 	fi\n \
 done\n \
@@ -295,12 +300,51 @@ fi\n \
 	close(fd);
 }
 
+#define LOCKFILE "/var/run/uart.pid"
+#define LOCKMODE S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH
+
+int lockfile(int fd)
+{
+	struct flock flk;
+	flk.l_type = F_WRLCK;
+	flk.l_start = 0;
+	flk.l_whence = SEEK_SET;
+	flk.l_len = 0;
+	return fcntl(fd, F_SETLK, &flk);
+}
+
+int already_running(void)  // 只允许程序运行一次
+{
+	int fd;
+	char buf[16] = {};
+	if((fd = open(LOCKFILE, O_RDWR | O_CREAT, LOCKMODE)) < 0){
+		syslog(LOG_ERR, "can't open %s: %s", LOCKFILE, strerror(errno));
+		exit(1);
+	}
+	if(lockfile(fd) < 0){
+		if(errno == EACCES || errno == EAGAIN){
+			close(fd);
+			return 1;
+		}
+		syslog(LOG_ERR, "can't lock %s: %s", LOCKFILE, strerror(errno));
+		exit(1);
+	}
+	ftruncate(fd, 0);
+	snprintf(buf, 16, "%ld", (long)getpid());
+	write(fd, buf, strlen(buf)+1);
+	return 0;
+}
+
 int main(int argc, char* argv[])
 {
 	int nwrite;
 	unsigned char temp = 50;  //初始化到正常的温度值, 以防第一次发送出现异常
 	int port = 2;
-	
+
+	if(already_running()){
+		syslog(LOG_ERR, "uart progress is already running");
+		exit(1);
+	}
 	signal(SIGUSR1, sighandler);   // 信号SIGUSR1用于恢复到正常读取硬盘和cpu的温度的流程中去
 	signal(SIGUSR2, sighandler);  // 以下3个信号用于设置关机, 初始化, 恢复出厂设置的3种状态码值, 最后统一由串口发给mcu
 	signal(3, sighandler);
@@ -347,7 +391,8 @@ int main(int argc, char* argv[])
 			if(flag_tempget++ >= 90){  // 每90s获取一次温度
 				flag_tempget = 0;
 				temp_cpu = (unsigned char)cputemp_get(fd_tempf);
-				if((temp_hdd = hddtemp_get()) < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0引发未知错误, 没硬盘时硬盘检测到的温度会是0
+				temp_hdd = hddtemp_get();
+				if(temp_hdd < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0引发未知错误, 没硬盘时硬盘检测到的温度会是0
 					temp_hdd = 0;
 				temp_hdd = (75*10 + (temp_hdd - 30) * 16) / 10;
 			
