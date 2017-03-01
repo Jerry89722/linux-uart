@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <syslog.h>
+#include <sys/wait.h>
 
 /*打开串口函数*/
 int open_port(int fd,int comport)
@@ -238,6 +239,13 @@ void sighandler(int arg)
 	return ;
 }
 
+void sigchld_handler(int arg)
+{
+	int status = 0;
+	while(waitpid(-1, &status, WNOHANG) > 0);
+	return;
+}
+
 char hddtemp_get(void)
 {
 	unsigned char temp = 0;
@@ -245,7 +253,9 @@ char hddtemp_get(void)
 	int status = 0;
 	FILE* pf = NULL;
 	
-	//signal(SIGCHLD, SIG_IGN); 
+	//程序运行<有时>会产生僵尸进程, 怀疑是popen子进程产生, 故作此处理, 
+	//但popen产生僵尸进程的问题未证实, 如此处理效果也未证实
+	signal(SIGCHLD, sigchld_handler);   
 	//popen调用产生的子进程退出后会发SIGHLD信号
 	pf = popen("/bin/sh /tmp/run/hddtemp", "r");
 	if(NULL == fgets(temp_str, 12, pf)) {
