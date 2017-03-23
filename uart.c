@@ -301,7 +301,7 @@ elif [ $disknum = 2 ]; then\n \
 fi\n \
 ";
 
-	int fd = open("/tmp/run/hddtemp", O_RDWR | O_CREAT, 777);
+	int fd = open("/tmp/run/hddtemp", O_RDWR | O_CREAT, 0755);
 	if(fd < 0)
 		perror("open"), exit(-1);
 	int res = write(fd, get_hddtempsh, strlen(get_hddtempsh));
