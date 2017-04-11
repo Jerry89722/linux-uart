@@ -209,16 +209,17 @@ static int fd_tty;
 static int signalno = 0;
 void* tty_rcv(void* fd_tty)
 {
+	unsigned char dataframe[4] = {0, 0xef, 0xff, 0xee};
 	int fd = *((int*)fd_tty);
 	char tty_signal[64] = {};
-	unsigned char power_signal = 0xff;
+	//unsigned char power_signal = 0xff;
 	int res = 0;
 	while(1){
 		res = read(fd, tty_signal, 64);
 		
 		if(!strncmp(tty_signal, "poweroff", 8)){
 			if(fcntl(fd, F_SETLK, &tty_lock) == 0){
-				write(fd, &power_signal, 1);
+				write(fd, dataframe, 4);
 				close(fd);
 			}
 			system("sync");
@@ -348,7 +349,8 @@ int already_running(void)  // 只允许程序运行一次
 int main(int argc, char* argv[])
 {
 	int nwrite;
-	unsigned char temp = 50;  //初始化到正常的温度值, 以防第一次发送出现异常
+	unsigned char dataframe[4] = {0, 0xef, 0x32, 0xee};
+	//unsigned char temp = 50;  //初始化到正常的温度值, 以防第一次发送出现异常
 	int port = 2;
 
 	if(already_running()){
@@ -386,15 +388,15 @@ int main(int argc, char* argv[])
 	char flag_tempget = 90;
 	for( ; ; ){
 		if(signalno == SIGUSR2){
-			temp = 0xff; // 关机, 用于脚本编程中关机
+			dataframe[2] = 0xff; // 关机, 用于脚本编程中关机
 			flag_tempget = 90;
 		}
 		else if(signalno == 3){
-			temp = 0xfe; // 初始化
+			dataframe[2] = 0xfe; // 初始化
 			flag_tempget = 90;
 		}
 		else if(signalno == 4){
-			temp = 0xfd; // 恢复出厂设置
+			dataframe[2] = 0xfd; // 恢复出厂设置
 			flag_tempget = 90;
 		}
 		else { //信号1时, 正常读取硬盘, cpu的温度
@@ -406,14 +408,15 @@ int main(int argc, char* argv[])
 					temp_hdd = 0;
 				temp_hdd = (75*10 + (temp_hdd - 30) * 16) / 10;
 			
-				temp = temp_cpu > temp_hdd ? temp_cpu : temp_hdd;  //30~55 75~115
+				dataframe[2] = temp_cpu > temp_hdd ? temp_cpu : temp_hdd;  //30~55 75~115
 
 				// printf("temp = %d, temp_hdd = %d, temp_cpu = %d \n", temp, temp_hdd, temp_cpu);  //没硬盘时温度temp_hdd = 27
 			}
 		}
 		//printf("signalno = %d \n", signalno);
 		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){   //文件锁, 防止与关机检测线程中写tty时冲突
-			nwrite=write(fd_tty, &temp, 1);//写串口
+			// printf("datafram[2] = %u\n", dataframe[2]);
+			nwrite=write(fd_tty, dataframe, 4);//写串口
 			lseek(fd_tty, SEEK_SET, 0);
 			tty_lock.l_type = F_UNLCK;
 			fcntl(fd_tty, F_SETLK, &tty_lock);
