@@ -234,7 +234,7 @@ void* tty_rcv(void* fd_tty)
 
 void sighandler(int arg)
 {
-	//printf("get a signal = %d \n ", arg);
+	// printf("get a signal = %d \n ", arg);
 	char data;
 	signalno = arg;
 	return ;
@@ -272,6 +272,9 @@ char hddtemp_get(void)
 
 void hddtemp_get_init(void){
 //  获取硬盘温度脚本代码
+//  获取硬盘温度信息的目的： 
+//  1. 控制关机保护硬盘，未超过最高温度忽略
+//  2. 控制风扇用于散热， 未超过warnlevel忽略
 char get_hddtempsh[] = "diskname=`cat /proc/partitions | grep \"sd[a-z]$\" | awk '{print $4}'`\n \
 for i in $diskname; do\n \
 	scsidevinfo=`find /sys/class/scsi_device/*/device/ -name $i`\n \
@@ -280,26 +283,44 @@ for i in $diskname; do\n \
 		disksymbol=`echo $scsidevinfo | awk -F '/' '{print $5}' | awk -F ':' '{print $1}'`\n \
 		ls /proc/scsi/usb-storage/ 2>/dev/null | grep ^$disksymbol$\n \
 		if [ $? != 0 ]; then\n \
-			temp=$temp\" \"`lancehddtemp /dev/$i 2>/dev/null | awk -F ':' '{print $3}' | awk '{print $1}'`\n \
-			temp=`expr $temp + 0`\n \
-			if [ $? != 0 ]; then\n \
-				temp=0			\n \
-			fi\n \
+			tempinfo=`lancehddtemp /dev/$i 2>/dev/null`\n \
+			model=`echo $tempinfo | awk -F':' '{print $2}'` \n \
+			model=`echo ${model% *}`	\n \
+			temp=`echo $tempinfo | awk -F':' '{print $3}' | awk '{print $1}'`\n \
+			expr \"$temp\" + \"0\" 1>/dev/null 2>/dev/null \n \
+			if [ $? != 0 ]; then \n \
+				temp=\"0\" \n \
+			fi \n \
+			hdparm -H /dev/$i 2>/dev/null | grep \"drive temperature in range:\" | grep -v \"yes\"\n \
+			# 确定超过最高温度 直接关机并告知mcu\n \
+			if [ $? = 0 ]; then \n \
+				echo 255 \n \
+				exit \n \
+			#用于处理温度不高于上限或无法判断的情形\n \
+			else \n \
+				warnlevel=`grep \"$model\" /etc/config/hd.list | awk -F':level:' '{print $2}'`\n \
+				if [ -z \"$warnlevel\" ]; then \n \
+					warnlevel=48 \n \
+				fi \n \
+				upperlevel=`grep \"$model\" /etc/config/hd.list | awk -F':level:' '{print $3}'`\n \
+				if [ -z \"$upperlevel\" ]; then \n \
+					upperlevel=55 \n \
+				fi \n \
+				#用于处理温度不高于上限或无法判断的情形\n \
+				if [ \"$temp\" -gt \"$warnlevel\" ] && [ \"$temp\" -le \"$upperlevel\" ];then \n \
+					echo 110 ##不是具体正确值，只表示较高温度值， 方便后面处理 \n \
+					exit \n \
+				#超过最高温度，关机并告知mcu\n \
+				elif [ \"$temp\" -gt \"$upperlevel\" ]; then \n \
+					echo 255 \n \
+					exit \n \
+				else\n\
+					echo 35	##不是具体的正确值， 只表示较低温度值， 方便后面处理\n \
+				fi \n \
+			fi \n \
 		fi\n \
 	fi\n \
 done\n \
-disknum=`echo $temp | awk '{print NF}'`\n \
-if [ $disknum = 1 ];then\n \
-	echo $temp\n \
-elif [ $disknum = 2 ]; then\n \
-	res=`echo $temp | awk '{print $1 \" - \" $2}'`\n \
-	res=`expr $res`\n \
-	if [ $res -gt 0 ]; then\n \
-		echo $temp | awk '{print $1}'\n \
-	else\n \
-		echo $temp | awk '{print $2}'\n \
-	fi\n \
-fi\n \
 ";
 
 	int fd = open("/tmp/run/hddtemp", O_RDWR | O_CREAT, 0755);
@@ -390,32 +411,41 @@ int main(int argc, char* argv[])
 		if(signalno == SIGUSR2){
 			dataframe[2] = 0xff; // 关机, 用于脚本编程中关机
 			flag_tempget = 90;
-		}
-		else if(signalno == 3){
+		} else if(signalno == 3){
 			dataframe[2] = 0xfe; // 初始化
 			flag_tempget = 90;
-		}
-		else if(signalno == 4){
+		} else if(signalno == 4){
 			dataframe[2] = 0xfd; // 恢复出厂设置
 			flag_tempget = 90;
-		}
-		else { //信号1时, 正常读取硬盘, cpu的温度
+		} else { //无信号或接收信号1后, 正常读取硬盘, cpu的温度
 			if(flag_tempget++ >= 90){  // 每90s获取一次温度
 				flag_tempget = 0;
 				temp_cpu = (unsigned char)cputemp_get(fd_tempf);
 				temp_hdd = hddtemp_get();
 				if(temp_hdd < 0)  // 防止环境温度极冷刚开机时硬盘温度小于0引发未知错误, 没硬盘时硬盘检测到的温度会是0
 					temp_hdd = 0;
-				temp_hdd = (75*10 + (temp_hdd - 30) * 16) / 10;
-			
-				dataframe[2] = temp_cpu > temp_hdd ? temp_cpu : temp_hdd;  //30~55 75~115
+				
+				// 硬盘温度没有获取正确值,只有70,110,0xff, 分别表示硬盘温度正常和较高需要风扇加速散热,超过最高温度要关机保护
+				if(temp_hdd == 110)
+					dataframe[2] = temp_hdd;
+				else if(temp_hdd == 0xff){
+					dataframe[2] = temp_hdd;
+					if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){   //文件锁, 防止与关机检测线程中写tty时冲突
+						nwrite=write(fd_tty, dataframe, 4);//写串口
+						lseek(fd_tty, SEEK_SET, 0);
+						tty_lock.l_type = F_UNLCK;
+						fcntl(fd_tty, F_SETLK, &tty_lock);
+					}
+					sleep(1);
+					system("poweroff -f");
+				}
+				else
+					dataframe[2] = temp_cpu;
 
 				// printf("temp = %d, temp_hdd = %d, temp_cpu = %d \n", temp, temp_hdd, temp_cpu);  //没硬盘时温度temp_hdd = 27
 			}
 		}
-		//printf("signalno = %d \n", signalno);
 		if(fcntl(fd_tty, F_SETLK, &tty_lock) == 0){   //文件锁, 防止与关机检测线程中写tty时冲突
-			// printf("datafram[2] = %u\n", dataframe[2]);
 			nwrite=write(fd_tty, dataframe, 4);//写串口
 			lseek(fd_tty, SEEK_SET, 0);
 			tty_lock.l_type = F_UNLCK;
